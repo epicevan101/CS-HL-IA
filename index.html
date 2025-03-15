@@ -2,16 +2,25 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>iTunes</title>
-    <link href="styes.css" rel="stylesheet"/>
+    <title>Classroom Organizer</title>
+    <link rel="stylesheet" href="styles.css">
     <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
-    <script src="script.js"></script>
+    <script src="script.js" defer></script>
 </head>
 <body>
+    <h1>Classroom Seating Organizer</h1>
 
-    <button onclick="run()">GO!</button>
+    <h3>Enter Student Data (Name, Rowdiness, Participation, Teacher Preference, Door Preference)</h3>
+    <textarea id="studentInput" rows="10" cols="50" placeholder="Example: 
+John Doe, 5, 3, near, away
+Jane Smith, 2, 8, any, near
+..."></textarea>
+    
+    <h3>Enter Seat Numbers (comma-separated, order matters for layout)</h3>
+    <input type="text" id="seatInput" placeholder="Example: 1,2,3,4,5,6,7,8,9,10">
 
-    <table id="output" border="1"></table>
+    <button onclick="generateSeating()">Generate Seating</button>
 
+    <table id="seating-chart" border="1"></table>
 </body>
 </html>
