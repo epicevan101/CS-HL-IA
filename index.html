@@ -2,50 +2,968 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Classroom Organizer</title>
-  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
-  
+  <title>Classroom Organizer – Final Configuration System</title>
+  <style>
+    /* Basic Styles */
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      background-color: #f0f0f0;
+    }
+    h1 { color: #444; }
+    .controls { margin-bottom: 10px; }
+    table {
+      border-collapse: collapse;
+      margin: 10px 0;
+      width: 100%;
+    }
+    td, th {
+      border: 1px solid #999;
+      padding: 6px;
+      text-align: center;
+      min-width: 80px;
+    }
+    /* Seating layout container */
+    #layout-container {
+      position: relative;
+      width: 600px;
+      height: 500px;
+      margin: 20px 0;
+      background-color: #fff;
+      border: 1px solid #ccc;
+    }
+    /* Unassigned students container */
+    #side-container {
+      margin-top: 20px;
+      padding: 10px;
+      background-color: #eef;
+      border: 1px solid #99c;
+      min-height: 50px;
+    }
+    /* Teacher & Door labels */
+    .teacher-label {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-weight: bold;
+      font-size: 1.2em;
+      background-color: #ddd;
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+    .door-label {
+      position: absolute;
+      left: 50px;
+      top: 150px;
+      font-weight: bold;
+      font-size: 0.9em;
+      background-color: #ddd;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    /* Seat styling */
+    .seat, .unassigned {
+      width: 45px;
+      height: 45px;
+      line-height: 45px;
+      text-align: center;
+      border: 1px solid #666;
+      border-radius: 50%;
+      font-size: 0.75em;
+      user-select: none;
+      cursor: move;
+      overflow: hidden;
+    }
+    .seat { position: absolute; }
+    .unassigned { display: inline-block; margin: 4px; position: relative; }
+    .seat-number { font-weight: bold; }
+    /* Input table styling */
+    #studentTableBody input { width: 90%; }
+    button {
+      background-color: #007ACC;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 6px 12px;
+      margin: 4px;
+      cursor: pointer;
+    }
+    button:hover { background-color: #005B99; }
+  </style>
+  <script>
+    /***********************
+     * GLOBAL DATA & CONSTANTS
+     ***********************/
+    let students = [];  // Array of objects: { name, rowdiness }
+    let currentAssignment = []; // Mapping: seat index -> student index (-1 means empty)
+    const MAX_ATTEMPTS = 10;
+    const LOCAL_SEARCH_SWAPS = 50;
+    const DIST_ADJ = 65; // pixels
+
+    /***********************
+     * SAVED CONFIGURATIONS
+     ***********************/
+    // Saved configurations are stored in localStorage under "classroomConfigurations"
+    // as an array of objects: { title, students, assignment, seatCount }
+
+    /***********************
+     * UTILITY FUNCTIONS
+     ***********************/
+    function shuffle(array) {
+      for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+      }
+    }
+    function areSeatsAdjacent(a, b) {
+      if (!a || !b) return false;
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      return Math.sqrt(dx * dx + dy * dy) < DIST_ADJ;
+    }
+
+    /***********************
+     * 1) DATA HANDLING & INPUT TABLE
+     ***********************/
+    // "Create Table" resets the student list.
+    function generateInputTable() {
+      let count = parseInt(document.getElementById("seatCount").value) || 0;
+      students = [];
+      for (let i = 0; i < count; i++) {
+        students.push({ name: "", rowdiness: 0 });
+      }
+      drawTable(count);
+    }
+    // Draw the table using current "students" array.
+    function drawTable(count) {
+      const tbody = document.getElementById("studentTableBody");
+      tbody.innerHTML = "";
+      for (let i = 0; i < count; i++) {
+        const tr = document.createElement("tr");
+        const tdName = document.createElement("td");
+        const inpName = document.createElement("input");
+        inpName.type = "text";
+        inpName.placeholder = "Name";
+        inpName.value = students[i].name;
+        inpName.setAttribute("data-row", i);
+        inpName.setAttribute("data-col", 0);
+        tdName.appendChild(inpName);
+        const tdRowdy = document.createElement("td");
+        const inpRowdy = document.createElement("input");
+        inpRowdy.type = "number";
+        inpRowdy.min = "0";
+        inpRowdy.max = "10";
+        inpRowdy.value = students[i].rowdiness;
+        inpRowdy.placeholder = "Rowdiness";
+        inpRowdy.setAttribute("data-row", i);
+        inpRowdy.setAttribute("data-col", 1);
+        tdRowdy.appendChild(inpRowdy);
+        tr.appendChild(tdName);
+        tr.appendChild(tdRowdy);
+        tbody.appendChild(tr);
+      }
+      attachArrowKeyNavigation();
+      document.getElementById("seatCount").value = count;
+    }
+    // "Add Student" appends a new row without resetting.
+    function addStudentRow() {
+      readFromTable();
+      students.push({ name: "", rowdiness: 0 });
+      drawTable(students.length);
+    }
+    function readFromTable() {
+  const rows = document.querySelectorAll("#studentTableBody tr");
+  const temp = [];
+  rows.forEach((row) => {
+    const inputs = row.querySelectorAll("input");
+    let r = parseInt(inputs[1].value);
+    if (isNaN(r)) {
+      r = 0;
+    } else {
+      r = Math.min(10, Math.max(0, r)); // Clamp value between 0 and 10
+    }
+    temp.push({ name: inputs[0].value.trim(), rowdiness: r });
+  });
+  students = temp;
+}
+    /***********************
+     * Arrow-Key Navigation
+     ***********************/
+    function attachArrowKeyNavigation() {
+      const inputs = document.querySelectorAll("#studentTableBody input");
+      inputs.forEach(inp => {
+        inp.addEventListener("keydown", function(e) {
+          const row = parseInt(this.getAttribute("data-row"));
+          const col = parseInt(this.getAttribute("data-col"));
+          let target = null;
+          if (e.key === "ArrowRight") {
+            target = document.querySelector(`#studentTableBody input[data-row="${row}"][data-col="${col+1}"]`);
+          }
+          if (e.key === "ArrowLeft") {
+            target = document.querySelector(`#studentTableBody input[data-row="${row}"][data-col="${col-1}"]`);
+          }
+          if (e.key === "ArrowDown") {
+            target = document.querySelector(`#studentTableBody input[data-row="${row+1}"][data-col="${col}"]`);
+          }
+          if (e.key === "ArrowUp") {
+            target = document.querySelector(`#studentTableBody input[data-row="${row-1}"][data-col="${col}"]`);
+          }
+          if (target) {
+            target.focus();
+            e.preventDefault();
+          }
+        });
+      });
+    }
+
+    /***********************
+     * 2) ROWDINESS UTILITIES
+     ***********************/
+    function getRowdinessColor(r) {
+      const intensity = Math.min(255, Math.floor((r / 10) * 255));
+      return `rgb(255, ${255 - intensity}, ${255 - intensity})`;
+    }
+    function checkRowdyLimit() {
+      if (!students.length) return;
+      const rowdyCount = students.filter(s => s.rowdiness >= 6).length;
+      if (rowdyCount / students.length > 0.5) {
+        alert("Warning: More than 50% of the students are rowdy!");
+      }
+    }
+
+    /***********************
+     * 3) SEAT POSITIONS (Straight-Line U, 0-indexed)
+     ***********************/
+    function getSeatPositions(count) {
+      if (count > 30) count = 30;
+      const seatPos = new Array(count);
+      // Outer left: seats 0–4
+      const baseLeftX = 100, baseLeftY = 150;
+      for (let i = 0; i < 5 && i < count; i++) {
+        seatPos[i] = { x: baseLeftX, y: baseLeftY + 50 * i };
+      }
+      // Outer bottom: seats 5–9
+      const baseBottomX = 150, baseBottomY = 400;
+      for (let i = 5; i < 10 && i < count; i++) {
+        const idx = i - 5;
+        seatPos[i] = { x: baseBottomX + 50 * idx, y: baseBottomY };
+      }
+      // Outer right: seats 10–14
+      const baseRightX = 400, baseRightY = 350;
+      for (let i = 10; i < 15 && i < count; i++) {
+        const idx = i - 10;
+        seatPos[i] = { x: baseRightX, y: baseRightY - 50 * idx };
+      }
+      // Inner left: seats 15–17
+      if (count > 15) {
+        const baseILX = 160, baseILY = 200;
+        for (let i = 15; i < 18 && i < count; i++) {
+          const idx = i - 15;
+          seatPos[i] = { x: baseILX, y: baseILY + 50 * idx };
+        }
+      }
+      // Inner bottom: seats 18–20
+      if (count > 18) {
+        const baseIBX = 210, baseIBY = 350;
+        for (let i = 18; i < 21 && i < count; i++) {
+          const idx = i - 18;
+          seatPos[i] = { x: baseIBX + 50 * idx, y: baseIBY };
+        }
+      }
+      // Inner right: seats 21–23
+      if (count > 21) {
+        const baseIRX = 360, baseIRY = 300;
+        for (let i = 21; i < 24 && i < count; i++) {
+          const idx = i - 21;
+          seatPos[i] = { x: baseIRX, y: baseIRY - 50 * idx };
+        }
+      }
+      // Extra seats: 24–29
+      const extras = [
+        { x: 100, y: 100 }, // Seat 25
+        { x: 250, y: 80  }, // Seat 26
+        { x: 400, y: 50  }, // Seat 27
+        { x: 160, y: 150 }, // Seat 28
+        { x: 260, y: 300 }, // Seat 29
+        { x: 360, y: 250 }  // Seat 30
+      ];
+      let eIndex = 0;
+      for (let i = 24; i < 30 && i < count; i++) {
+        seatPos[i] = extras[eIndex++];
+      }
+      return seatPos;
+    }
+    
+    /***********************
+     * 4) PAIRING CHECK (Generalized for n between 18 and 30)
+     ***********************/
+    // Using rounded formulas:
+    // gapLeft = round(11 + ((n - 18) / 6) * 3)
+    // gapBack = round(9 + ((n - 18) / 6) * 3)
+    // gapRight = round(7 + ((n - 18) / 6) * 3)
+    function checkPairing(assignment, n) {
+      if (n < 18) return true;
+      let gapLeft = Math.round(11 + ((n - 18) / 6) * 3);
+      let gapBack = Math.round(9 + ((n - 18) / 6) * 3);
+      let gapRight = Math.round(7 + ((n - 18) / 6) * 3);
+      // Left side: indices 1, 2, 3
+      for (let i of [1, 2, 3]) {
+        if (i + gapLeft < n) {
+          let front = assignment[i];
+          let back = assignment[i + gapLeft];
+          if (students[front].rowdiness >= 6 && students[back].rowdiness >= 6) return false;
+        }
+      }
+      // Back side: indices 6, 7, 8
+      for (let i of [6, 7, 8]) {
+        if (i + gapBack < n) {
+          let front = assignment[i];
+          let back = assignment[i + gapBack];
+          if (students[front].rowdiness >= 6 && students[back].rowdiness >= 6) return false;
+        }
+      }
+      // Right side: indices 10, 11, 12
+      for (let i of [10, 11, 12]) {
+        if (i + gapRight < n) {
+          let front = assignment[i];
+          let back = assignment[i + gapRight];
+          if (students[front].rowdiness >= 6 && students[back].rowdiness >= 6) return false;
+        }
+      }
+      return true;
+    }
+    
+    /***********************
+     * 4) MULTIPLE BACKTRACKING ATTEMPTS WITH PAIRING CHECK
+     ***********************/
+    function tryAssignSeats(studList, seatPositions) {
+      const n = seatPositions.length;
+      const seatAdj = new Array(n).fill(null).map(() => []);
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          if (areSeatsAdjacent(seatPositions[i], seatPositions[j])) {
+            seatAdj[i].push(j);
+            seatAdj[j].push(i);
+          }
+        }
+      }
+      function canPlace(stuIdx, seatIdx, assignment) {
+        if (studList[stuIdx].rowdiness >= 6) {
+          for (const adj of seatAdj[seatIdx]) {
+            const occ = assignment[adj];
+            if (occ !== -1 && studList[occ].rowdiness >= 6) return false;
+          }
+        }
+        return true;
+      }
+      function backtrack(seatOrder, index, used, assignment) {
+        if (index === seatOrder.length) return true;
+        const seatIdx = seatOrder[index];
+        for (let s = 0; s < studList.length; s++) {
+          if (!used[s]) {
+            if (canPlace(s, seatIdx, assignment)) {
+              assignment[seatIdx] = s;
+              used[s] = true;
+              if (backtrack(seatOrder, index + 1, used, assignment)) return true;
+              used[s] = false;
+              assignment[seatIdx] = -1;
+            }
+          }
+        }
+        return false;
+      }
+      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+        const seatOrder = [];
+        for (let i = 0; i < n; i++) seatOrder.push(i);
+        shuffle(seatOrder);
+        shuffle(studList);
+        const assignment = new Array(n).fill(-1);
+        const used = new Array(studList.length).fill(false);
+        if (backtrack(seatOrder, 0, used, assignment)) {
+          if (checkPairing(assignment, n)) return assignment;
+        }
+      }
+      return null;
+    }
+    
+    /***********************
+     * 5) LOCAL SEARCH SWAP (Improve Rowdy Spacing)
+     ***********************/
+    function localSearchSwap(assignment, studList, seatPositions) {
+      const n = seatPositions.length;
+      const seatAdj = new Array(n).fill(null).map(() => []);
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          if (areSeatsAdjacent(seatPositions[i], seatPositions[j])) {
+            seatAdj[i].push(j);
+            seatAdj[j].push(i);
+          }
+        }
+      }
+      function countConflicts(assign) {
+        let conflicts = 0;
+        for (let i = 0; i < n; i++) {
+          const s1 = assign[i];
+          if (studList[s1].rowdiness < 6) continue;
+          for (const j of seatAdj[i]) {
+            if (j > i) {
+              const s2 = assign[j];
+              if (studList[s2].rowdiness >= 6) conflicts++;
+            }
+          }
+        }
+        return conflicts;
+      }
+      let bestConf = countConflicts(assignment);
+      if (bestConf === 0) return;
+      for (let attempt = 0; attempt < LOCAL_SEARCH_SWAPS; attempt++) {
+        let improved = false;
+        for (let i = 0; i < n; i++) {
+          if (studList[assignment[i]].rowdiness < 6) continue;
+          for (let j = 0; j < n; j++) {
+            if (i === j) continue;
+            if (studList[assignment[j]].rowdiness < 6) continue;
+            [assignment[i], assignment[j]] = [assignment[j], assignment[i]];
+            let newConf = countConflicts(assignment);
+            if (newConf < bestConf) {
+              bestConf = newConf;
+              improved = true;
+            } else {
+              [assignment[i], assignment[j]] = [assignment[j], assignment[i]];
+            }
+          }
+          if (improved) break;
+        }
+        if (!improved || bestConf === 0) break;
+      }
+    }
+    
+    /***********************
+     * 6) RENDER LAYOUT & ENABLE DRAG-AND-DROP
+     ***********************/
+    function renderLayout() {
+      const container = document.getElementById("layout-container");
+      container.innerHTML = "";
+      if (!students.length) return;
+      checkRowdyLimit();
+      const teacherDiv = document.createElement("div");
+      teacherDiv.className = "teacher-label";
+      teacherDiv.textContent = "Teacher";
+      container.appendChild(teacherDiv);
+      const doorDiv = document.createElement("div");
+      doorDiv.className = "door-label";
+      doorDiv.textContent = "Door";
+      container.appendChild(doorDiv);
+      let seatCount = students.length;
+      if (seatCount > 30) seatCount = 30;
+      const seatPositions = getSeatPositions(seatCount);
+      const assignment = tryAssignSeats(students.slice(), seatPositions);
+      if (!assignment) {
+        container.innerHTML = "<p style='color:red;'>No valid arrangement found (too many rowdy students?).</p>";
+        return;
+      }
+      localSearchSwap(assignment, students, seatPositions);
+      currentAssignment = assignment.slice();
+      for (let i = 0; i < seatCount; i++) {
+        const stuIdx = assignment[i];
+        const s = students[stuIdx];
+        const pos = seatPositions[i];
+        if (!pos) continue;
+        const seatDiv = document.createElement("div");
+        seatDiv.className = "seat";
+        seatDiv.setAttribute("data-seat", i);
+        seatDiv.setAttribute("draggable", "true");
+        seatDiv.style.left = pos.x + "px";
+        seatDiv.style.top = pos.y + "px";
+        seatDiv.style.backgroundColor = getRowdinessColor(s.rowdiness);
+        seatDiv.title = `Rowdiness: ${s.rowdiness}`;
+        seatDiv.innerHTML = `<span class="seat-number">${i+1}:</span> ${s.name}`;
+        seatDiv.addEventListener("dragstart", dragStart);
+        seatDiv.addEventListener("dragover", dragOver);
+        seatDiv.addEventListener("drop", dropSeat);
+        container.appendChild(seatDiv);
+      }
+    }
+    
+    /***********************
+     * 7) RENDER LAYOUT FROM SAVED ASSIGNMENT
+     ***********************/
+    function renderLayoutFromAssignment(assignment, seatCount) {
+      const container = document.getElementById("layout-container");
+      container.innerHTML = "";
+      if (!students.length) return;
+      checkRowdyLimit();
+      const teacherDiv = document.createElement("div");
+      teacherDiv.className = "teacher-label";
+      teacherDiv.textContent = "Teacher";
+      container.appendChild(teacherDiv);
+      const doorDiv = document.createElement("div");
+      doorDiv.className = "door-label";
+      doorDiv.textContent = "Door";
+      container.appendChild(doorDiv);
+      if (seatCount > 30) seatCount = 30;
+      const seatPositions = getSeatPositions(seatCount);
+      currentAssignment = assignment.slice();
+      for (let i = 0; i < seatCount; i++) {
+        const stuIdx = assignment[i];
+        const s = (stuIdx === -1) ? { name: "", rowdiness: 0 } : students[stuIdx];
+        const pos = seatPositions[i];
+        if (!pos) continue;
+        const seatDiv = document.createElement("div");
+        seatDiv.className = "seat";
+        seatDiv.setAttribute("data-seat", i);
+        seatDiv.setAttribute("draggable", "true");
+        seatDiv.style.left = pos.x + "px";
+        seatDiv.style.top = pos.y + "px";
+        seatDiv.style.backgroundColor = getRowdinessColor(s.rowdiness);
+        seatDiv.title = `Rowdiness: ${s.rowdiness}`;
+        seatDiv.innerHTML = `<span class="seat-number">${i+1}:</span> ${s.name}`;
+        seatDiv.addEventListener("dragstart", dragStart);
+        seatDiv.addEventListener("dragover", dragOver);
+        seatDiv.addEventListener("drop", dropSeat);
+        container.appendChild(seatDiv);
+      }
+      attachSideDropHandlers();
+    }
+    
+    /***********************
+     * 8) RENDERING & MAIN CONFIG FUNCTIONS
+     ***********************/
+    function renderAll() {
+      clearSideContainer();
+      renderLayout();
+      attachSideDropHandlers();
+      updateConfigDropdown();
+    }
+    
+    function generateSeatingChart() {
+      readFromTable();
+      const seatCount = students.length > 30 ? 30 : students.length;
+      const seatPositions = getSeatPositions(seatCount);
+      const assignment = tryAssignSeats(students.slice(), seatPositions);
+      if (!assignment) {
+        document.getElementById("layout-container").innerHTML = "<p style='color:red;'>No valid arrangement found (too many rowdy students?).</p>";
+        return;
+      }
+      localSearchSwap(assignment, students, seatPositions);
+      currentAssignment = assignment.slice();
+      renderLayout();
+    }
+    
+    /***********************
+     * 9) CONFIGURATION SAVE/LOAD SYSTEM
+     ***********************/
+    function updateConfigDropdown() {
+      const dropdown = document.getElementById("configDropdown");
+      dropdown.innerHTML = "";
+      const configs = JSON.parse(localStorage.getItem("classroomConfigurations")) || [];
+      configs.forEach((config, index) => {
+        const option = document.createElement("option");
+        option.value = index;
+        option.textContent = config.title;
+        dropdown.appendChild(option);
+      });
+    }
+    function saveConfiguration() {
+      if (!currentAssignment.length) {
+        alert("Generate a seating chart before saving a configuration.");
+        return;
+      }
+      const title = prompt("Enter a title for this configuration:");
+      if (!title) return;
+      const config = {
+        title: title,
+        students: students,
+        assignment: currentAssignment,
+        seatCount: students.length > 30 ? 30 : students.length
+      };
+      let configs = JSON.parse(localStorage.getItem("classroomConfigurations")) || [];
+      configs.push(config);
+      localStorage.setItem("classroomConfigurations", JSON.stringify(configs));
+      updateConfigDropdown();
+      alert("Configuration saved!");
+    }
+    function loadConfiguration() {
+      const dropdown = document.getElementById("configDropdown");
+      const idx = parseInt(dropdown.value);
+      const configs = JSON.parse(localStorage.getItem("classroomConfigurations")) || [];
+      if (isNaN(idx) || idx < 0 || idx >= configs.length) {
+        alert("Select a valid configuration.");
+        return;
+      }
+      const config = configs[idx];
+      students = config.students;
+      currentAssignment = config.assignment;
+      drawTable(config.students.length);
+      renderLayoutFromAssignment(currentAssignment, config.seatCount);
+    }
+    
+    /***********************
+     * 10) DRAG-AND-DROP HANDLERS
+     ***********************/
+    function dragStart(e) {
+      if (this.classList.contains("seat")) {
+        draggedSeatIndex = parseInt(this.getAttribute("data-seat"));
+        e.dataTransfer.setData("text/plain", draggedSeatIndex);
+        e.dataTransfer.setData("fromSide", "false");
+      } else if (this.classList.contains("unassigned")) {
+        // Assign a unique id if not set.
+        if (!this.id) this.id = "side-" + this.getAttribute("data-stu");
+        e.dataTransfer.setData("text/plain", this.getAttribute("data-stu"));
+        e.dataTransfer.setData("fromSide", "true");
+        e.dataTransfer.setData("sideElementId", this.id);
+      }
+    }
+    function dragOver(e) { e.preventDefault(); }
+    function dropSeat(e) {
+      e.preventDefault();
+      const targetSeatIndex = parseInt(this.getAttribute("data-seat"));
+      const fromSide = e.dataTransfer.getData("fromSide");
+      if (fromSide === "true") {
+        const stuIdx = parseInt(e.dataTransfer.getData("text/plain"));
+        const sideElemId = e.dataTransfer.getData("sideElementId");
+        const sideElem = document.getElementById(sideElemId);
+        if (sideElem && sideElem.parentNode) {
+          sideElem.parentNode.removeChild(sideElem);
+        }
+        if (currentAssignment[targetSeatIndex] === -1) {
+          currentAssignment[targetSeatIndex] = stuIdx;
+        } else {
+          const occupant = currentAssignment[targetSeatIndex];
+          currentAssignment[targetSeatIndex] = stuIdx;
+          moveToSide(occupant);
+        }
+        updateSeatDOM(targetSeatIndex, students[stuIdx].name, getRowdinessColor(students[stuIdx].rowdiness));
+      } else {
+        const sourceSeatIndex = parseInt(e.dataTransfer.getData("text/plain"));
+        if (sourceSeatIndex === targetSeatIndex) return;
+        const sourceStuIdx = currentAssignment[sourceSeatIndex];
+        const targetStuIdx = currentAssignment[targetSeatIndex];
+        if (targetStuIdx === -1) {
+          currentAssignment[targetSeatIndex] = sourceStuIdx;
+        } else {
+          currentAssignment[targetSeatIndex] = sourceStuIdx;
+          moveToSide(targetStuIdx);
+        }
+        currentAssignment[sourceSeatIndex] = -1;
+        updateSeatDOM(sourceSeatIndex, "", "#fff");
+        updateSeatDOM(targetSeatIndex, students[sourceStuIdx].name, getRowdinessColor(students[sourceStuIdx].rowdiness));
+      }
+    }
+    function updateSeatDOM(seatIdx, text, bgColor) {
+      const seatDiv = document.querySelector(`.seat[data-seat='${seatIdx}']`);
+      if (seatDiv) {
+        seatDiv.innerHTML = text ? `<span class="seat-number">${seatIdx+1}:</span> ${text}` : `<span class="seat-number">${seatIdx+1}:</span>`;
+        seatDiv.style.backgroundColor = bgColor;
+      }
+    }
+    function moveToSide(stuIdx) {
+      if (stuIdx === -1) return;
+      const sideContainer = document.getElementById("side-container");
+      // Remove any existing unassigned element for this student.
+      const existing = document.querySelector(`.unassigned[data-stu='${stuIdx}']`);
+      if (existing) existing.parentNode.removeChild(existing);
+      const div = document.createElement("div");
+      div.className = "unassigned";
+      div.setAttribute("draggable", "true");
+      div.setAttribute("data-stu", stuIdx);
+      div.style.backgroundColor = getRowdinessColor(students[stuIdx].rowdiness);
+      div.innerHTML = `<span class="seat-number">${students[stuIdx].name}</span>`;
+      div.addEventListener("dragstart", dragStart);
+      sideContainer.appendChild(div);
+    }
+    function attachSideDropHandlers() {
+      const seats = document.querySelectorAll(".seat");
+      seats.forEach(seat => {
+        seat.addEventListener("dragover", dragOver);
+        seat.addEventListener("drop", dropSeat);
+      });
+    }
+    function clearSideContainer() {
+      document.getElementById("side-container").innerHTML = "";
+    }
+    
+    /***********************
+     * 11) LOCAL SEARCH SWAP (Improve Rowdy Spacing)
+     ***********************/
+    function localSearchSwap(assignment, studList, seatPositions) {
+      const n = seatPositions.length;
+      const seatAdj = new Array(n).fill(null).map(() => []);
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          if (areSeatsAdjacent(seatPositions[i], seatPositions[j])) {
+            seatAdj[i].push(j);
+            seatAdj[j].push(i);
+          }
+        }
+      }
+      function countConflicts(assign) {
+        let conflicts = 0;
+        for (let i = 0; i < n; i++) {
+          const s1 = assign[i];
+          if (studList[s1].rowdiness < 6) continue;
+          for (const j of seatAdj[i]) {
+            if (j > i) {
+              const s2 = assign[j];
+              if (studList[s2].rowdiness >= 6) conflicts++;
+            }
+          }
+        }
+        return conflicts;
+      }
+      let bestConf = countConflicts(assignment);
+      if (bestConf === 0) return;
+      for (let attempt = 0; attempt < LOCAL_SEARCH_SWAPS; attempt++) {
+        let improved = false;
+        for (let i = 0; i < n; i++) {
+          if (studList[assignment[i]].rowdiness < 6) continue;
+          for (let j = 0; j < n; j++) {
+            if (i === j) continue;
+            if (studList[assignment[j]].rowdiness < 6) continue;
+            [assignment[i], assignment[j]] = [assignment[j], assignment[i]];
+            let newConf = countConflicts(assignment);
+            if (newConf < bestConf) {
+              bestConf = newConf;
+              improved = true;
+            } else {
+              [assignment[i], assignment[j]] = [assignment[j], assignment[i]];
+            }
+          }
+          if (improved) break;
+        }
+        if (!improved || bestConf === 0) break;
+      }
+    }
+    
+    /***********************
+     * 12) CONFIGURATION SAVE/LOAD SYSTEM
+     ***********************/
+    function updateConfigDropdown() {
+      const dropdown = document.getElementById("configDropdown");
+      dropdown.innerHTML = "";
+      const configs = JSON.parse(localStorage.getItem("classroomConfigurations")) || [];
+      configs.forEach((config, index) => {
+        const option = document.createElement("option");
+        option.value = index;
+        option.textContent = config.title;
+        dropdown.appendChild(option);
+      });
+    }
+    function saveConfiguration() {
+      if (!currentAssignment.length) {
+        alert("Generate a seating chart before saving a configuration.");
+        return;
+      }
+      const title = prompt("Enter a title for this configuration:");
+      if (!title) return;
+      const config = {
+        title: title,
+        students: students,
+        assignment: currentAssignment,
+        seatCount: students.length > 30 ? 30 : students.length
+      };
+      let configs = JSON.parse(localStorage.getItem("classroomConfigurations")) || [];
+      configs.push(config);
+      localStorage.setItem("classroomConfigurations", JSON.stringify(configs));
+      updateConfigDropdown();
+      alert("Configuration saved!");
+    }
+    function loadConfiguration() {
+      const dropdown = document.getElementById("configDropdown");
+      const idx = parseInt(dropdown.value);
+      const configs = JSON.parse(localStorage.getItem("classroomConfigurations")) || [];
+      if (isNaN(idx) || idx < 0 || idx >= configs.length) {
+        alert("Select a valid configuration.");
+        return;
+      }
+      const config = configs[idx];
+      students = config.students;
+      currentAssignment = config.assignment;
+      drawTable(config.students.length);
+      renderLayoutFromAssignment(currentAssignment, config.seatCount);
+    }
+    function renderLayoutFromAssignment(assignment, seatCount) {
+      const container = document.getElementById("layout-container");
+      container.innerHTML = "";
+      if (!students.length) return;
+      checkRowdyLimit();
+      const teacherDiv = document.createElement("div");
+      teacherDiv.className = "teacher-label";
+      teacherDiv.textContent = "Teacher";
+      container.appendChild(teacherDiv);
+      const doorDiv = document.createElement("div");
+      doorDiv.className = "door-label";
+      doorDiv.textContent = "Door";
+      container.appendChild(doorDiv);
+      if (seatCount > 30) seatCount = 30;
+      const seatPositions = getSeatPositions(seatCount);
+      currentAssignment = assignment.slice();
+      for (let i = 0; i < seatCount; i++) {
+        const stuIdx = assignment[i];
+        const s = (stuIdx === -1) ? { name: "", rowdiness: 0 } : students[stuIdx];
+        const pos = seatPositions[i];
+        if (!pos) continue;
+        const seatDiv = document.createElement("div");
+        seatDiv.className = "seat";
+        seatDiv.setAttribute("data-seat", i);
+        seatDiv.setAttribute("draggable", "true");
+        seatDiv.style.left = pos.x + "px";
+        seatDiv.style.top = pos.y + "px";
+        seatDiv.style.backgroundColor = getRowdinessColor(s.rowdiness);
+        seatDiv.title = `Rowdiness: ${s.rowdiness}`;
+        seatDiv.innerHTML = `<span class="seat-number">${i+1}:</span> ${s.name}`;
+        seatDiv.addEventListener("dragstart", dragStart);
+        seatDiv.addEventListener("dragover", dragOver);
+        seatDiv.addEventListener("drop", dropSeat);
+        container.appendChild(seatDiv);
+      }
+      attachSideDropHandlers();
+    }
+    
+    /***********************
+     * 13) RENDERING & MAIN CONFIG FUNCTIONS
+     ***********************/
+    function renderAll() {
+      clearSideContainer();
+      renderLayout();
+      attachSideDropHandlers();
+      updateConfigDropdown();
+    }
+    function generateSeatingChart() {
+      readFromTable();
+      const seatCount = students.length > 30 ? 30 : students.length;
+      const seatPositions = getSeatPositions(seatCount);
+      const assignment = tryAssignSeats(students.slice(), seatPositions);
+      if (!assignment) {
+        document.getElementById("layout-container").innerHTML = "<p style='color:red;'>No valid arrangement found (too many rowdy students?).</p>";
+        return;
+      }
+      localSearchSwap(assignment, students, seatPositions);
+      currentAssignment = assignment.slice();
+      renderLayout();
+    }
+    
+    window.onload = function() {
+      updateConfigDropdown();
+    };
+    
+    /***********************
+     * 14) DRAG-AND-DROP HANDLERS
+     ***********************/
+    let draggedSeatIndex = null;
+    function dragStart(e) {
+      if (this.classList.contains("seat")) {
+        draggedSeatIndex = parseInt(this.getAttribute("data-seat"));
+        e.dataTransfer.setData("text/plain", draggedSeatIndex);
+        e.dataTransfer.setData("fromSide", "false");
+      } else if (this.classList.contains("unassigned")) {
+        if (!this.id) this.id = "side-" + this.getAttribute("data-stu");
+        e.dataTransfer.setData("text/plain", this.getAttribute("data-stu"));
+        e.dataTransfer.setData("fromSide", "true");
+        e.dataTransfer.setData("sideElementId", this.id);
+      }
+    }
+    function dragOver(e) { e.preventDefault(); }
+    function dropSeat(e) {
+      e.preventDefault();
+      const targetSeatIndex = parseInt(this.getAttribute("data-seat"));
+      const fromSide = e.dataTransfer.getData("fromSide");
+      if (fromSide === "true") {
+        const stuIdx = parseInt(e.dataTransfer.getData("text/plain"));
+        const sideElemId = e.dataTransfer.getData("sideElementId");
+        const sideElem = document.getElementById(sideElemId);
+        if (sideElem && sideElem.parentNode) {
+          sideElem.parentNode.removeChild(sideElem);
+        }
+        if (currentAssignment[targetSeatIndex] === -1) {
+          currentAssignment[targetSeatIndex] = stuIdx;
+        } else {
+          const occupant = currentAssignment[targetSeatIndex];
+          currentAssignment[targetSeatIndex] = stuIdx;
+          moveToSide(occupant);
+        }
+        updateSeatDOM(targetSeatIndex, students[stuIdx].name, getRowdinessColor(students[stuIdx].rowdiness));
+      } else {
+        const sourceSeatIndex = parseInt(e.dataTransfer.getData("text/plain"));
+        if (sourceSeatIndex === targetSeatIndex) return;
+        const sourceStuIdx = currentAssignment[sourceSeatIndex];
+        const targetStuIdx = currentAssignment[targetSeatIndex];
+        if (targetStuIdx === -1) {
+          currentAssignment[targetSeatIndex] = sourceStuIdx;
+        } else {
+          currentAssignment[targetSeatIndex] = sourceStuIdx;
+          moveToSide(targetStuIdx);
+        }
+        currentAssignment[sourceSeatIndex] = -1;
+        updateSeatDOM(sourceSeatIndex, "", "#fff");
+        updateSeatDOM(targetSeatIndex, students[sourceStuIdx].name, getRowdinessColor(students[sourceStuIdx].rowdiness));
+      }
+    }
+    function updateSeatDOM(seatIdx, text, bgColor) {
+      const seatDiv = document.querySelector(`.seat[data-seat='${seatIdx}']`);
+      if (seatDiv) {
+        seatDiv.innerHTML = text ? `<span class="seat-number">${seatIdx+1}:</span> ${text}` : `<span class="seat-number">${seatIdx+1}:</span>`;
+        seatDiv.style.backgroundColor = bgColor;
+      }
+    }
+    function moveToSide(stuIdx) {
+      if (stuIdx === -1) return;
+      const sideContainer = document.getElementById("side-container");
+      const existing = document.querySelector(`.unassigned[data-stu='${stuIdx}']`);
+      if (existing) { existing.parentNode.removeChild(existing); }
+      const div = document.createElement("div");
+      div.className = "unassigned";
+      div.setAttribute("draggable", "true");
+      div.setAttribute("data-stu", stuIdx);
+      div.style.backgroundColor = getRowdinessColor(students[stuIdx].rowdiness);
+      div.innerHTML = `<span class="seat-number">${students[stuIdx].name}</span>`;
+      div.addEventListener("dragstart", dragStart);
+      sideContainer.appendChild(div);
+    }
+    function attachSideDropHandlers() {
+      const seats = document.querySelectorAll(".seat");
+      seats.forEach(seat => {
+        seat.addEventListener("dragover", dragOver);
+        seat.addEventListener("drop", dropSeat);
+      });
+    }
+    function clearSideContainer() {
+      document.getElementById("side-container").innerHTML = "";
+    }
+  </script>
 </head>
 <body>
-  <h1>Classroom Organizer</h1>
-
-  <label>Number of Students:</label>
-  <input type="number" id="seatCount" min="1" max="40">
-  <button onclick="generateInputTable()">Create Table</button>
-
-  <br><br>
-  <label>Is your classroom U-shaped?</label>
-  <select id="isUShaped">
-    <option value="yes">Yes</option>
-    <option value="no">No</option>
-  </select>
-
-  <div>
-    <label><input type="checkbox" id="useRowdiness" checked> Use Rowdiness Logic</label>
-    <label><input type="checkbox" id="useTeacher" checked> Use Teacher Proximity</label>
+  <h1>Classroom Organizer – Final with Save Config & Drag/DnD</h1>
+  <div class="controls">
+    <label>Number of Students:</label>
+    <input type="number" id="seatCount" min="1" max="30" style="width:60px;">
+    <button onclick="generateInputTable()">Create Table (Reset)</button>
+    <button onclick="addStudentRow()">Add Student</button>
+    <button onclick="generateSeatingChart()">Generate Seating Chart</button>
+    <button onclick="saveConfiguration()">Save Configuration</button>
+    <button onclick="loadConfiguration()">Load Configuration</button>
+    <select id="configDropdown"></select>
   </div>
-
-  <br>
-  <button onclick="generateSeating()">Generate Seating Chart</button>
-  <button onclick="saveData()">Save</button>
-  <button onclick="loadData()">Load</button>
-
-  <h2>Student Input</h2>
+  <p style="font-size:0.9em; color:#555;">
+    1) Enter your student list (Name & Rowdiness).  
+    2) Use "Add Student" to add more rows without resetting.  
+    3) Click "Generate Seating Chart" to create the layout.  
+    4) Then drag and drop a seat (or an unassigned student) onto another to reassign.
+  </p>
+  <!-- Student Input Table -->
   <table border="1">
     <thead>
       <tr>
         <th>Name</th>
         <th>Rowdiness</th>
-        <th>Participation</th>
-        <th>Teacher Preference</th>
-        <th>Door Preference</th>
       </tr>
     </thead>
-    <tbody id="studentTable"></tbody>
+    <tbody id="studentTableBody"></tbody>
   </table>
-
   <h2>Seating Chart</h2>
-  <table id="seating-chart" border="1"></table>
-  <script src="script.js"></script>
+  <div id="layout-container"></div>
+  <h3>Unassigned Students (Drag them into empty seats):</h3>
+  <div id="side-container"></div>
 </body>
 </html>
