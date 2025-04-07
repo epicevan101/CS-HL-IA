@@ -5,7 +5,7 @@
   <title>Classroom Organizer – Final Configuration System</title>
   <style>
     /* Basic Styles */
-    body {
+    body{
       font-family: Arial, sans-serif;
       margin: 20px;
       background-color: #f0f0f0;
@@ -63,18 +63,23 @@
       border-radius: 4px;
     }
     /* Seat styling */
-    .seat, .unassigned {
-      width: 45px;
-      height: 45px;
-      line-height: 45px;
-      text-align: center;
-      border: 1px solid #666;
-      border-radius: 50%;
-      font-size: 0.75em;
-      user-select: none;
-      cursor: move;
-      overflow: hidden;
-    }
+    .seat {
+  width: 60px;
+  height: 60px;
+  border: 1px solid #666;
+  border-radius: 50%;
+  font-size: 0.65em;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  white-space: normal;       /* Allow line breaks */
+  word-wrap: break-word;     /* Break long words */
+  overflow: hidden;          /* Still clip excess but allow wrapping */
+  user-select: none;
+  cursor: move;
+}
     .seat { position: absolute; }
     .unassigned { display: inline-block; margin: 4px; position: relative; }
     .seat-number { font-weight: bold; }
